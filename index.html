@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Aero PDF</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Aero PDF">
+    <meta name="theme-color" content="#12161c">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="icon" type="image/png" href="apple-touch-icon.png">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ==================== БИБЛИОТЕКА ==================== -->
+<div id="library-view" class="view active">
+    <header class="library-header">
+        <h1>Aero PDF</h1>
+        <button id="theme-toggle" class="icon-btn" title="Сменить тему">◐</button>
+    </header>
+
+    <div class="import-area">
+        <label for="file-input" class="btn btn-primary btn-large">Открыть PDF</label>
+        <input type="file" id="file-input" accept="application/pdf,.pdf" multiple>
+    </div>
+
+    <div id="doc-list" class="doc-list"></div>
+</div>
+
+<!-- ==================== ПРОСМОТРЩИК ==================== -->
+<div id="viewer-view" class="view">
+    <div id="viewer-topbar">
+        <button id="btn-back" class="icon-btn" title="Назад">←</button>
+        <span id="doc-title" class="viewer-title">Документ</span>
+        <button id="btn-toc" class="icon-btn" title="Оглавление">☰</button>
+        <button id="btn-search" class="icon-btn" title="Поиск">🔍</button>
+    </div>
+
+    <div id="toc-panel" class="side-panel">
+        <div class="side-panel-header">
+            <span>Оглавление</span>
+            <button id="toc-close" class="icon-btn">✕</button>
+        </div>
+        <div id="toc-content" class="side-panel-content"></div>
+    </div>
+
+    <div id="search-panel" class="side-panel">
+        <div class="side-panel-header">
+            <span>Поиск</span>
+            <button id="search-close" class="icon-btn">✕</button>
+        </div>
+        <div class="search-input-wrap">
+            <input type="text" id="search-input" placeholder="Слово, номер, обозначение..." autocomplete="off">
+            <button id="search-go" class="btn btn-small">Найти</button>
+        </div>
+        <div id="search-results" class="side-panel-content"></div>
+        <div id="search-nav" class="search-nav hidden">
+            <button id="search-prev" class="btn btn-small">←</button>
+            <span id="search-counter">0/0</span>
+            <button id="search-next" class="btn btn-small">→</button>
+        </div>
+    </div>
+
+    <div id="pdf-container">
+        <div id="pdf-pages"></div>
+    </div>
+
+    <div id="viewer-bottombar">
+        <button id="btn-zoom-out" class="icon-btn" title="Уменьшить">−</button>
+        <button id="btn-zoom-in" class="icon-btn" title="Увеличить">+</button>
+        <button id="btn-prev-page" class="icon-btn" title="Предыдущая">‹</button>
+        <input type="number" id="page-input" min="1" value="1">
+        <span id="page-total">/ 0</span>
+        <button id="btn-next-page" class="icon-btn" title="Следующая">›</button>
+    </div>
+
+    <div id="loading-indicator" class="hidden">Загрузка…</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
