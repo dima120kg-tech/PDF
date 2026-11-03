@@ -1,6 +1,6 @@
 /* ============================================================
    Aero PDF — быстрый автономный просмотрщик
-   PDF.js + IndexedDB + Service Worker
+   PDF.js + IndexedDB + Service Worker + ленивая загрузка
    ============================================================ */
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -75,12 +75,13 @@ async function dbDelete(id) {
 // ---------- Состояние ----------
 let currentPdf = null;
 let currentDocId = null;
-let currentScale = 1.2;
+let currentScale = 0.8;
 let totalPages = 0;
 let currentPage = 1;
 let searchResults = [];
 let searchResultIndex = -1;
 let tocData = null;
+let renderedPages = new Set();
 
 // ---------- DOM ----------
 const libraryView = document.getElementById('library-view');
@@ -240,13 +241,30 @@ async function openDocument(id) {
         currentDocId = id;
         docTitle.textContent = doc.name;
 
-        const loadingTask = pdfjsLib.getDocument({ data: doc.data });
+        let pdfData = doc.data;
+        if (pdfData instanceof ArrayBuffer) {
+            pdfData = new Uint8Array(pdfData);
+        } else if (pdfData && pdfData.buffer) {
+            pdfData = new Uint8Array(pdfData.buffer);
+        }
+
+        loadingIndicator.textContent = 'Чтение документа…';
+
+        const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+
+        loadingTask.onProgress = (progress) => {
+            if (progress.total) {
+                const percent = Math.round((progress.loaded / progress.total) * 100);
+                loadingIndicator.textContent = `Чтение ${percent}%…`;
+            }
+        };
+
         currentPdf = await loadingTask.promise;
         totalPages = currentPdf.numPages;
         currentPage = 1;
         pageTotal.textContent = `/ ${totalPages}`;
         pageInput.value = 1;
-        currentScale = 1.2;
+        currentScale = 0.8;
 
         try {
             tocData = await currentPdf.getOutline();
@@ -254,52 +272,105 @@ async function openDocument(id) {
             tocData = null;
         }
 
-        await renderAllPages();
-
+        // Переключаемся на просмотрщик ДО рендера, чтобы не было белого экрана
         libraryView.classList.remove('active');
         viewerView.classList.add('active');
-
         resetSearch();
-
         pdfContainer.scrollTop = 0;
 
+        // Рендерим плейсхолдеры и первую страницу
+        await renderAllPages();
+
     } catch (err) {
-        console.error(err);
-        alert('Не удалось открыть документ.');
+        console.error('openDocument ERROR:', err);
+        alert('Не удалось открыть документ: ' + (err && err.message ? err.message : err));
+        // Возвращаемся в библиотеку, если открытие не удалось
+        viewerView.classList.remove('active');
+        libraryView.classList.add('active');
     } finally {
         loadingIndicator.classList.add('hidden');
     }
 }
 
-// ---------- Рендеринг ----------
+// ---------- Рендеринг (ленивая загрузка) ----------
 async function renderAllPages() {
     pdfPages.innerHTML = '';
+    renderedPages.clear();
 
     for (let i = 1; i <= totalPages; i++) {
-        const page = await currentPdf.getPage(i);
+        const placeholder = document.createElement('div');
+        placeholder.className = 'pdf-page-placeholder';
+        placeholder.dataset.page = i;
+        placeholder.style.cssText = `
+            width: 100%;
+            max-width: 900px;
+            height: ${Math.round(window.innerHeight * 1.3)}px;
+            margin: 0 auto 12px;
+            background: #1a2230;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #4a9eff;
+            font-size: 14px;
+        `;
+        placeholder.textContent = `Стр. ${i}`;
+        pdfPages.appendChild(placeholder);
+    }
 
-        const maxDimension = 4096;
+    await renderPageIfNeeded(1);
+    lazyLoad();
+}
+
+async function renderPageIfNeeded(pageNum) {
+    if (renderedPages.has(pageNum)) return;
+    if (!currentPdf) return;
+    if (pageNum < 1 || pageNum > totalPages) return;
+
+    renderedPages.add(pageNum);
+
+    const placeholder = pdfPages.querySelector(`[data-page="${pageNum}"]`);
+    if (!placeholder) return;
+
+    try {
+        const page = await currentPdf.getPage(pageNum);
+
+        const maxDimension = 3000;
         let scale = currentScale;
-        const baseViewport = page.getViewport({ scale: 1 });
-        if (baseViewport.width * scale > maxDimension || baseViewport.height * scale > maxDimension) {
-            scale = Math.min(maxDimension / baseViewport.width, maxDimension / baseViewport.height);
+        const base = page.getViewport({ scale: 1 });
+        if (base.width * scale > maxDimension || base.height * scale > maxDimension) {
+            scale = Math.min(maxDimension / base.width, maxDimension / base.height);
         }
 
         const viewport = page.getViewport({ scale });
 
         const canvas = document.createElement('canvas');
         canvas.className = 'pdf-page-canvas';
-        canvas.dataset.page = i;
+        canvas.dataset.page = pageNum;
         canvas.width = viewport.width;
         canvas.height = viewport.height;
 
         const ctx = canvas.getContext('2d');
-        await page.render({
-            canvasContext: ctx,
-            viewport: viewport
-        }).promise;
+        await page.render({ canvasContext: ctx, viewport: viewport }).promise;
 
-        pdfPages.appendChild(canvas);
+        placeholder.replaceWith(canvas);
+    } catch (err) {
+        console.error('Ошибка рендера страницы', pageNum, err);
+        placeholder.textContent = `Стр. ${pageNum} — ошибка`;
+    }
+}
+
+function lazyLoad() {
+    const placeholders = pdfPages.querySelectorAll('.pdf-page-placeholder');
+    const containerRect = pdfContainer.getBoundingClientRect();
+
+    for (const ph of placeholders) {
+        const rect = ph.getBoundingClientRect();
+        if (rect.top < containerRect.bottom + containerRect.height * 2 &&
+            rect.bottom > containerRect.top - containerRect.height * 2) {
+            const pageNum = parseInt(ph.dataset.page);
+            if (!isNaN(pageNum)) renderPageIfNeeded(pageNum);
+        }
     }
 }
 
@@ -310,9 +381,11 @@ function goToPage(num) {
     currentPage = num;
     pageInput.value = num;
 
-    const canvas = pdfPages.querySelector(`[data-page="${num}"]`);
-    if (canvas) {
-        canvas.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    renderPageIfNeeded(num);
+
+    const el = pdfPages.querySelector(`[data-page="${num}"]`);
+    if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 }
 
@@ -327,16 +400,18 @@ document.getElementById('btn-next-page').addEventListener('click', () => goToPag
 
 // ---------- Масштаб ----------
 document.getElementById('btn-zoom-in').addEventListener('click', async () => {
-    currentScale = Math.min(currentScale + 0.25, 4);
+    currentScale = Math.min(currentScale + 0.25, 3);
+    renderedPages.clear();
     await renderAllPages();
 });
 
 document.getElementById('btn-zoom-out').addEventListener('click', async () => {
     currentScale = Math.max(currentScale - 0.25, 0.5);
+    renderedPages.clear();
     await renderAllPages();
 });
 
-// Pinch-to-zoom
+// Pinch-to-zoom (упрощённый — после жеста перерендер с новым масштабом)
 let pinchStartDist = 0;
 let pinchStartScale = 1;
 
@@ -357,7 +432,7 @@ pdfContainer.addEventListener('touchmove', (e) => {
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         const dist = Math.sqrt(dx * dx + dy * dy);
         const ratio = dist / pinchStartDist;
-        const newScale = Math.max(0.5, Math.min(pinchStartScale * ratio, 4));
+        const newScale = Math.max(0.5, Math.min(pinchStartScale * ratio, 3));
         pdfPages.style.transform = `scale(${newScale / currentScale})`;
         pdfPages.style.transformOrigin = 'top center';
     }
@@ -366,9 +441,10 @@ pdfContainer.addEventListener('touchmove', (e) => {
 pdfContainer.addEventListener('touchend', async (e) => {
     if (e.touches.length < 2 && pinchStartDist > 0) {
         const computed = parseFloat((pdfPages.style.transform.match(/scale\(([^)]+)\)/) || [])[1]) || 1;
-        currentScale = Math.max(0.5, Math.min(currentScale * computed, 4));
+        currentScale = Math.max(0.5, Math.min(currentScale * computed, 3));
         pdfPages.style.transform = '';
         pinchStartDist = 0;
+        renderedPages.clear();
         await renderAllPages();
     }
 });
@@ -557,20 +633,21 @@ document.getElementById('btn-back').addEventListener('click', () => {
     currentPdf = null;
     currentDocId = null;
     tocData = null;
+    renderedPages.clear();
     pdfPages.innerHTML = '';
     renderLibrary();
 });
 
 // ---------- Отслеживание текущей страницы при скролле ----------
 pdfContainer.addEventListener('scroll', () => {
-    const canvases = pdfPages.querySelectorAll('.pdf-page-canvas');
+    const canvases = pdfPages.querySelectorAll('.pdf-page-canvas, .pdf-page-placeholder');
     const containerRect = pdfContainer.getBoundingClientRect();
     const midY = containerRect.top + containerRect.height / 2;
 
-    for (const canvas of canvases) {
-        const rect = canvas.getBoundingClientRect();
+    for (const el of canvases) {
+        const rect = el.getBoundingClientRect();
         if (rect.top <= midY && rect.bottom >= midY) {
-            const pageNum = parseInt(canvas.dataset.page);
+            const pageNum = parseInt(el.dataset.page);
             if (pageNum && pageNum !== currentPage) {
                 currentPage = pageNum;
                 pageInput.value = pageNum;
@@ -578,6 +655,9 @@ pdfContainer.addEventListener('scroll', () => {
             break;
         }
     }
+
+    // Ленивая загрузка
+    lazyLoad();
 }, { passive: true });
 
 // ---------- Утилиты ----------
@@ -609,4 +689,5 @@ async function init() {
     }
 }
 
-init();
+// Ждём загрузки PDF.js (он с defer) перед стартом
+window.addEventListener('load', init);
